@@ -94,10 +94,15 @@ public class ArenaManager
 
     private GameLocation GetOrCreateArena()
     {
-        // always rebuild so map/code changes take effect within a session
-        var old = Game1.getLocationFromName(ArenaLocationName);
-        if (old != null)
-            Game1.locations.Remove(old);
+        // Reuse the arena if it already exists and is intact. Rebuilding it every session caused the
+        // "works the first time, broken the second" bug: SMAPI caches the injected map asset, so the
+        // re-created location could get a stale/empty map (no walls, no monsters, walkable void).
+        var existing = Game1.getLocationFromName(ArenaLocationName);
+        if (existing != null && existing.map != null && existing.map.Layers.Count > 0)
+            return existing;
+
+        if (existing != null)
+            Game1.locations.Remove(existing);
         var arena = new GameLocation(ArenaMapAsset, ArenaLocationName);
         arena.map.LoadTileSheets(Game1.mapDisplayDevice);
         Game1.locations.Add(arena);

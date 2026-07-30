@@ -15,28 +15,29 @@ namespace MonsterArena;
 /// under the north wall. A floor margin surrounds the room so the camera never shows void.</summary>
 public class ArenaMapAsset
 {
-    // the enclosed room interior
-    public const int W = 13, H = 8;
+    // the enclosed room interior — wide enough that the monster pen has walkable space on BOTH
+    // sides (so you can always get in front of a knocked-back monster to finish it, no 穿墙 needed)
+    public const int W = 15, H = 9;
     // floor margin around the room so the camera never shows void when it pans
-    public const int Pad = 5;
-    public const int FullW = W + Pad * 2, FullH = H + Pad * 2;   // 23 x 18
+    public const int Pad = 4;
+    public const int FullW = W + Pad * 2, FullH = H + Pad * 2;   // 23 x 17
 
     // room origin inside the padded map
     public const int X0 = Pad, Y0 = Pad;
     public const int X1 = Pad + W - 1, Y1 = Pad + H - 1;
 
-    // monster pen: centred column, just under the north wall
-    public const int PenX = X0 + W / 2;   // 11
-    public const int PenY = Y0 + 1;       // 6
+    // monster pen: centred column, a couple tiles under the north wall (room to maneuver)
+    public const int PenX = X0 + W / 2;   // centred
+    public const int PenY = Y0 + 2;       // 2 below the north wall
 
     // south exit door: 2-tile gap in the south wall, centred
-    public const int DoorX0 = X0 + W / 2;      // 11
-    public const int DoorX1 = DoorX0 + 1;      // 12
-    public const int DoorY = Y1;               // south wall row (12)
+    public const int DoorX0 = X0 + W / 2;      // centred
+    public const int DoorX1 = DoorX0 + 1;
+    public const int DoorY = Y1;               // south wall row
 
-    // player spawn: just inside the door
-    public const int SpawnX = X0 + W / 2;      // 11
-    public const int SpawnY = Y1 - 1;          // 11
+    // player spawn: just inside the door, facing the pen (so the room is centred on you)
+    public const int SpawnX = X0 + W / 2;
+    public const int SpawnY = Y1 - 1;
 
     // townInterior sheet ("indoor" in FarmHouse1) — wall body tiles
     private const int WallTopL = 1, WallTopM = 2, WallTopR = 3;  // north wall top edge

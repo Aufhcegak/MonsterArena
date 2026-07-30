@@ -40,6 +40,20 @@ public class ModEntry : Mod
         });
     }
 
+    /// <summary>Expose a tiny API so an automated self-test mod can drive the arena.</summary>
+    public override object? GetApi(IModInfo mod) => new MonsterArenaApi(this.Arena);
+
+    public class MonsterArenaApi
+    {
+        private readonly ArenaManager arena;
+        public MonsterArenaApi(ArenaManager arena) => this.arena = arena;
+        public void QueueFirst(int count) => this.arena.QueuePurchase(MonsterCatalog.All[0], count);
+        public void QueueIndex(int index, int count) => this.arena.QueuePurchase(MonsterCatalog.All[index], count);
+        public void Begin() => this.arena.BeginSession();
+        public int Remaining() => this.arena.RemainingMonsters();
+        public bool Active => this.arena.SessionActive;
+    }
+
     // --- Marlon dialogue injection ---
     // The counter tile in front of Marlon has the tile action "AdventureShop", which routes to
     // GameLocation.adventureShop() (opens the shop, or a Shop/Recovery/Leave question if you have
@@ -149,11 +163,15 @@ public class ModEntry : Mod
             var map = asset.AsMap().Data;
             var buildings = map.GetLayer("Buildings");
             var tile = buildings.Tiles[76, 8];
-            if (tile != null && tile.Properties.TryGetValue("Action", out var action)
-                && action.ToString() == "LockedDoorWarp 6 19 AdventureGuild 1400 2600")
+            if (tile != null && tile.Properties.TryGetValue("Action", out var action))
             {
-                tile.Properties["Action"] = new xTile.ObjectModel.PropertyValue("LockedDoorWarp 6 19 AdventureGuild 900 2600");
-                this.Monitor.Log("冒险者公会开门时间已改为早上 9:00。", LogLevel.Info);
+                string current = action.ToString();
+                // only swap the open-time token, leave every other character untouched
+                if (current.StartsWith("LockedDoorWarp 6 19 AdventureGuild 1400"))
+                {
+                    tile.Properties["Action"] = new xTile.ObjectModel.PropertyValue("LockedDoorWarp 6 19 AdventureGuild 900" + current.Substring("LockedDoorWarp 6 19 AdventureGuild 1400".Length));
+                    this.Monitor.Log("冒险者公会开门时间已改为早上 9:00。", LogLevel.Info);
+                }
             }
         }, AssetEditPriority.Default);
     }
