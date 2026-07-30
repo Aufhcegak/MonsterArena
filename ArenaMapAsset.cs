@@ -124,6 +124,20 @@ public class ArenaMapAsset
             buildings.Tiles[X1 - 1, by] = new StaticTile(buildings, floors, BlendMode.Alpha, Baseboard);
         }
 
+        // --- HARD BORDER: isTilePassable() treats OUT-OF-BOUNDS tiles as passable (null tile),
+        // so the player could otherwise walk off the small map into the void ("穿墙"). Fill the
+        // entire outer ring of the Buildings layer with a blocking tile so you can never leave.
+        for (int x = 0; x < FullW; x++)
+        {
+            buildings.Tiles[x, 0] = new StaticTile(buildings, floors, BlendMode.Alpha, Baseboard);
+            buildings.Tiles[x, FullH - 1] = new StaticTile(buildings, floors, BlendMode.Alpha, Baseboard);
+        }
+        for (int y = 0; y < FullH; y++)
+        {
+            buildings.Tiles[0, y] = new StaticTile(buildings, floors, BlendMode.Alpha, Baseboard);
+            buildings.Tiles[FullW - 1, y] = new StaticTile(buildings, floors, BlendMode.Alpha, Baseboard);
+        }
+
         return map;
     }
 }
