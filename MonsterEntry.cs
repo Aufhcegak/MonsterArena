@@ -49,7 +49,11 @@ public class MonsterEntry : ISalable
     public string DisplayName => this.GetIcon().displayName ?? this.MonsterName;
     public string Name => this.MonsterName;
     public bool IsRecipe { get; set; }
-    public int Stack { get; set; } = 1;
+
+    // ShopMenu multiplies the buy count by item.Stack and writes it back, so letting Stack grow
+    // makes the quantity balloon (99 -> 625 -> 15625). Pin it to 1 so one click = one monster.
+    private int stack = 1;
+    public int Stack { get => 1; set => this.stack = 1; }
     public int Quality { get; set; }
 
     public bool ShouldDrawIcon() => true;

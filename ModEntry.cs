@@ -78,7 +78,7 @@ public class ModEntry : Mod
             responses.Insert(2, new Response("Recovery", "找回丢失的物品。"));
 
         location.createQuestionDialogue(
-            "哦？想练练手？我驯了一批怪物，明码标价，关在后面的围栏里，你只管砍。要买装备、找回东西，还是来练练？",
+            "哈，想练练手？我驯了一批怪物，全关在我亲手研发的「定身墙」里——那墙邪门得很，幽灵、飞蛇都别想钻出去。你只管进去对着它们一顿猛砍，它们跑不掉也伤不了你。明码标价，要来几只吗？",
             responses.ToArray(),
             new GameLocation.afterQuestionBehavior(this.OnArenaAnswer),
             Game1.getCharacterFromName("Marlon")
@@ -118,8 +118,8 @@ public class ModEntry : Mod
         foreach (var e in MonsterCatalog.All)
         {
             var entry = new MonsterEntry(e.Name, e.Price, e.Hp, e.Dmg, e.Exp, e.Factory);
-            // stock 99 so the row stays after buying; price from catalog
-            stock[entry] = new ItemStockInformation(e.Price, 99);
+            // stock 999 so the row stays after buying; price from catalog
+            stock[entry] = new ItemStockInformation(e.Price, 999);
         }
         var menu = new ShopMenu("xiepe.MonsterArena.Shop", stock, 0, "Marlon", this.OnPurchased, null, true);
         Game1.activeClickableMenu = menu;
@@ -157,6 +157,11 @@ public class ModEntry : Mod
 
         if (!this.Arena.SessionActive)
             return;
+
+        // keep monsters pinned to the pen (knockback can't push them through Marlon's wall)
+        if (Game1.currentLocation?.Name == ArenaManager.ArenaLocationName && e.IsMultipleOf(4))
+            this.Arena.RepinMonsters();
+
         // auto-end when the arena is cleared
         if (Game1.currentLocation?.Name == ArenaManager.ArenaLocationName && this.Arena.RemainingMonsters() == 0)
         {

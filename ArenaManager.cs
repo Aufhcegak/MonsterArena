@@ -58,7 +58,7 @@ public class ArenaManager
         this.SessionActive = true;
         if (Game1.activeClickableMenu is StardewValley.Menus.DialogueBox)
             Game1.activeClickableMenu.exitThisMenu();
-        Game1.warpFarmer(ArenaLocationName, 4, 5, 0); // stand in the south opening, facing the pen
+        Game1.warpFarmer(ArenaLocationName, 10, 8, 0); // stand in the open south, facing the pen
 
         var toSpawn = this.Pending.ToList();
         this.Pending.Clear();
@@ -68,9 +68,10 @@ public class ArenaManager
 
     private GameLocation GetOrCreateArena()
     {
-        var existing = Game1.getLocationFromName(ArenaLocationName);
-        if (existing != null)
-            return existing;
+        // always rebuild so map/code changes take effect within a session
+        var old = Game1.getLocationFromName(ArenaLocationName);
+        if (old != null)
+            Game1.locations.Remove(old);
         var arena = new GameLocation(ArenaMapAsset, ArenaLocationName);
         arena.map.LoadTileSheets(Game1.mapDisplayDevice);
         Game1.locations.Add(arena);
@@ -79,18 +80,16 @@ public class ArenaManager
 
     private void SpawnMonsters(GameLocation arena, List<MonsterCatalog.Entry> entries)
     {
-        // cluster all monsters against the north wall, packed in 2 tight rows so the player
-        // standing in the south opening can reach and see every one of them
-        int cols = 5;
-        int startX = 2, startY = 1;
+        // pack every monster onto ONE tile against the north wall. They take knockback but are
+        // pinned by Marlon's special wall on three sides, so you can keep juggling them forever.
+        const int penTileX = 10, penTileY = 2;
         int i = 0;
         foreach (var entry in entries)
         {
-            int col = i % cols;
-            int row = i / cols;
-            // slight pixel jitter so they overlap into one satisfying clump instead of a rigid grid
-            float jx = (i % 2 == 0) ? 0f : 24f;
-            Vector2 pixel = new Vector2((startX + col) * 64f + jx, (startY + row) * 64f);
+            // a couple pixels of jitter only, so they truly pile onto one spot
+            float jx = (i % 3 - 1) * 4f;
+            float jy = (i % 2) * 4f;
+            Vector2 pixel = new Vector2(penTileX * 64f + jx, penTileY * 64f + jy);
             Monster m = entry.Factory(pixel);
             this.Freeze(m);
             m.currentLocation = arena;
@@ -99,13 +98,40 @@ public class ArenaManager
         }
     }
 
-    /// <summary>Make a monster stand still, never attack, take no knockback, but still be killable.</summary>
+    /// <summary>Monster takes knockback (so hits feel good) but never moves on its own, never
+    /// attacks, and never leaves the pen — Marlon's wall stops even ghosts/serpents.</summary>
     private void Freeze(Monster m)
     {
-        m.stunTime.Value = int.MaxValue;
-        m.DamageToFarmer = 0;
-        m.Slipperiness = -1;
+        m.stunTime.Value = int.MaxValue;   // no self-movement / attacks
+        m.DamageToFarmer = 0;              // contact deals no damage
         m.focusedOnFarmers = false;
+        // NOTE: Slipperiness left at the monster's natural value so hits still knock it back;
+        // the surrounding walls cancel the slide so it stays piled on the pen tile.
+    }
+
+    /// <summary>Re-pin any monster that a hit knocked off the pen tile (safety net for the wall).</summary>
+    public void RepinMonsters()
+    {
+        var arena = Game1.getLocationFromName(ArenaLocationName);
+        if (arena == null)
+            return;
+        const int penTileX = 10, penTileY = 2;
+        int i = 0;
+        foreach (var c in arena.characters)
+        {
+            if (c is not Monster m || m.Health <= 0)
+                continue;
+            m.stunTime.Value = int.MaxValue;
+            m.DamageToFarmer = 0;
+            // if a knockback slid it away from the pen, snap it back onto the pile
+            if (m.Tile.X < 8 || m.Tile.X > 12 || m.Tile.Y > 4)
+            {
+                float jx = (i % 3 - 1) * 4f;
+                m.Position = new Vector2(penTileX * 64f + jx, penTileY * 64f);
+                m.xVelocity = 0; m.yVelocity = 0;
+            }
+            i++;
+        }
     }
 
     /// <summary>Send the player back and clean up the arena for next time.</summary>
