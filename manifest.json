@@ -1,0 +1,10 @@
+{
+  "Name": "Monster Arena",
+  "Author": "xiepe",
+  "Version": "1.0.0",
+  "Description": "马龙的驯怪场：花钱选怪，进战斗屋爽砍刷战斗经验和战利品。",
+  "UniqueID": "xiepe.MonsterArena",
+  "EntryDll": "MonsterArena.dll",
+  "MinimumApiVersion": "4.0.0",
+  "UpdateKeys": []
+}
