@@ -78,7 +78,7 @@ public class ModEntry : Mod
             responses.Insert(2, new Response("Recovery", "找回丢失的物品。"));
 
         location.createQuestionDialogue(
-            "哈，想练练手？我驯了一批怪物，全关在我亲手研发的「定身墙」里——那墙邪门得很，幽灵、飞蛇都别想钻出去。你只管进去对着它们一顿猛砍，它们跑不掉也伤不了你。明码标价，要来几只吗？",
+            "哈，想练练手？我驯了一批怪物，全关在我亲手研发的「定身墙」里——那墙邪门得很，幽灵、飞蛇都别想钻出去。你只管进去对着它们一顿猛砍，它们跑不掉也伤不了你，砍死照样掉东西、照样长经验。打完了捡完宝，从北墙那个门走出去就行。明码标价，要来几只吗？",
             responses.ToArray(),
             new GameLocation.afterQuestionBehavior(this.OnArenaAnswer),
             Game1.getCharacterFromName("Marlon")
@@ -138,6 +138,7 @@ public class ModEntry : Mod
 
     // --- session flow ---
     private bool wasShopOpen;
+    private bool wasAtExit;
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
     {
@@ -158,16 +159,27 @@ public class ModEntry : Mod
         if (!this.Arena.SessionActive)
             return;
 
+        // exit: stepping into the north door warps you back out (edge-triggered so the warp-in
+        // tile isn't mistaken for the door on the first frame)
+        bool atExit = this.Arena.IsPlayerAtExit();
+        if (atExit && !this.wasAtExit && Game1.activeClickableMenu == null)
+        {
+            this.wasAtExit = true;
+            Game1.drawObjectDialogue(RemainingSafe() > 0 ? "还有怪没打完，这就走？行吧，剩下的我收回去了。" : "打得漂亮！宝都捡好了吧，走你。");
+            this.Arena.ExitThroughDoor();
+            return;
+        }
+        this.wasAtExit = atExit;
+
         // keep monsters pinned to the pen (knockback can't push them through Marlon's wall)
         if (Game1.currentLocation?.Name == ArenaManager.ArenaLocationName && e.IsMultipleOf(4))
             this.Arena.RepinMonsters();
+    }
 
-        // auto-end when the arena is cleared
-        if (Game1.currentLocation?.Name == ArenaManager.ArenaLocationName && this.Arena.RemainingMonsters() == 0)
-        {
-            Game1.drawObjectDialogue("砍完了！过瘾吧。马龙把你送了回来。");
-            this.Arena.EndSession();
-        }
+    private static int RemainingSafe()
+    {
+        try { return ModEntry.Instance.Arena.RemainingMonsters(); }
+        catch { return 0; }
     }
 
     private void OnWarped(object? sender, WarpedEventArgs e)

@@ -24,10 +24,36 @@ public class ArenaManager
 
     public bool SessionActive { get; private set; }
 
+    // pen tile: clustered against the north wall, horizontally centred (offset by the floor pad)
+    public const int PenX = 6 + (MonsterArena.ArenaMapAsset.W - 1) / 2;  // room-centre column
+    public const int PenY = 6 + 2;
+    // player spawn: south of the pen, centred
+    public const int SpawnX = 6 + (MonsterArena.ArenaMapAsset.W - 1) / 2;
+    public const int SpawnY = 6 + MonsterArena.ArenaMapAsset.H - 3;
+
     public ArenaManager(IModHelper helper, IMonitor monitor)
     {
         this.helper = helper;
         this.monitor = monitor;
+    }
+
+    /// <summary>True when the local player is standing on a north exit tile (should warp out).</summary>
+    public bool IsPlayerAtExit()
+    {
+        if (Game1.currentLocation?.Name != ArenaLocationName)
+            return false;
+        var t = Game1.player.Tile;
+        int ty = (int)t.Y;
+        int tx = (int)t.X;
+        int door0 = 6 + MonsterArena.ArenaMapAsset.DoorX0;
+        int door1 = 6 + MonsterArena.ArenaMapAsset.DoorX1;
+        return ty <= 6 + 1 && (tx == door0 || tx == door1);
+    }
+
+    /// <summary>Warp the player out through the exit and clean up.</summary>
+    public void ExitThroughDoor()
+    {
+        this.EndSession();
     }
 
     public void QueuePurchase(MonsterCatalog.Entry entry, int count)
@@ -58,7 +84,7 @@ public class ArenaManager
         this.SessionActive = true;
         if (Game1.activeClickableMenu is StardewValley.Menus.DialogueBox)
             Game1.activeClickableMenu.exitThisMenu();
-        Game1.warpFarmer(ArenaLocationName, 10, 8, 0); // stand in the open south, facing the pen
+        Game1.warpFarmer(ArenaLocationName, SpawnX, SpawnY, 0); // stand south of the pen, facing it
 
         var toSpawn = this.Pending.ToList();
         this.Pending.Clear();
@@ -82,14 +108,13 @@ public class ArenaManager
     {
         // pack every monster onto ONE tile against the north wall. They take knockback but are
         // pinned by Marlon's special wall on three sides, so you can keep juggling them forever.
-        const int penTileX = 10, penTileY = 2;
         int i = 0;
         foreach (var entry in entries)
         {
             // a couple pixels of jitter only, so they truly pile onto one spot
             float jx = (i % 3 - 1) * 4f;
             float jy = (i % 2) * 4f;
-            Vector2 pixel = new Vector2(penTileX * 64f + jx, penTileY * 64f + jy);
+            Vector2 pixel = new Vector2(PenX * 64f + jx, PenY * 64f + jy);
             Monster m = entry.Factory(pixel);
             this.Freeze(m);
             m.currentLocation = arena;
@@ -115,7 +140,6 @@ public class ArenaManager
         var arena = Game1.getLocationFromName(ArenaLocationName);
         if (arena == null)
             return;
-        const int penTileX = 10, penTileY = 2;
         int i = 0;
         foreach (var c in arena.characters)
         {
@@ -124,17 +148,19 @@ public class ArenaManager
             m.stunTime.Value = int.MaxValue;
             m.DamageToFarmer = 0;
             // if a knockback slid it away from the pen, snap it back onto the pile
-            if (m.Tile.X < 8 || m.Tile.X > 12 || m.Tile.Y > 4)
+            if (m.Tile.X < PenX - 2 || m.Tile.X > PenX + 2 || m.Tile.Y > PenY + 2)
             {
                 float jx = (i % 3 - 1) * 4f;
-                m.Position = new Vector2(penTileX * 64f + jx, penTileY * 64f);
+                m.Position = new Vector2(PenX * 64f + jx, PenY * 64f);
                 m.xVelocity = 0; m.yVelocity = 0;
             }
             i++;
         }
     }
 
-    /// <summary>Send the player back and clean up the arena for next time.</summary>
+    /// <summary>Send the player back and clean up the arena for next time.
+    /// Drops (debris) are collected by the player before they walk out, so we only need to
+    /// remove any leftover live monsters; dead-monster loot has already spawned as debris.</summary>
     public void EndSession()
     {
         if (!this.SessionActive)
