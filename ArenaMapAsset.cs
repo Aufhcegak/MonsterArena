@@ -9,21 +9,34 @@ using xTile.Tiles;
 namespace MonsterArena;
 
 /// <summary>Provides the arena map via SMAPI's content pipeline.
-/// The layout and every tile index are copied 1:1 from the vanilla FarmHouse1 room
-/// (verified from Maps/FarmHouse1.xnb), so the walls/floor render exactly like a real room.
-/// North wall has a 2-tile gap that acts as the exit (walk in -> warp back to the Guild).
-/// Monsters cluster against the wall and can't escape because Buildings tiles block them.</summary>
+/// Every tile index is copied from the vanilla FarmHouse1 room (verified from Maps/FarmHouse1.xnb),
+/// so the walls/floor render exactly like a real room. The room is small and fully visible at once:
+/// the player spawns by the SOUTH door (walk into it = exit), the monster pen is centred just
+/// under the north wall. A floor margin surrounds the room so the camera never shows void.</summary>
 public class ArenaMapAsset
 {
-    // a bit wider than the default viewport so there's never a black void around the room
-    public const int W = 25, H = 15;
-    // a floor margin ring around the room so the camera never shows void when it pans
-    private const int Pad = 6;
-    public const int FullW = W + Pad * 2, FullH = H + Pad * 2;
+    // the enclosed room interior
+    public const int W = 13, H = 8;
+    // floor margin around the room so the camera never shows void when it pans
+    public const int Pad = 5;
+    public const int FullW = W + Pad * 2, FullH = H + Pad * 2;   // 23 x 18
 
-    // the exit: 2-tile gap in the north wall, horizontally centred
-    public const int DoorX0 = (W - 1) / 2;   // 12
-    public const int DoorX1 = DoorX0 + 1;    // 13
+    // room origin inside the padded map
+    public const int X0 = Pad, Y0 = Pad;
+    public const int X1 = Pad + W - 1, Y1 = Pad + H - 1;
+
+    // monster pen: centred column, just under the north wall
+    public const int PenX = X0 + W / 2;   // 11
+    public const int PenY = Y0 + 1;       // 6
+
+    // south exit door: 2-tile gap in the south wall, centred
+    public const int DoorX0 = X0 + W / 2;      // 11
+    public const int DoorX1 = DoorX0 + 1;      // 12
+    public const int DoorY = Y1;               // south wall row (12)
+
+    // player spawn: just inside the door
+    public const int SpawnX = X0 + W / 2;      // 11
+    public const int SpawnY = Y1 - 1;          // 11
 
     // townInterior sheet ("indoor" in FarmHouse1) — wall body tiles
     private const int WallTopL = 1, WallTopM = 2, WallTopR = 3;  // north wall top edge
@@ -41,10 +54,12 @@ public class ArenaMapAsset
             e.LoadFrom(this.BuildMap, AssetLoadPriority.Exclusive);
     }
 
+    public Map BuildMapPublic() => this.BuildMap();
+
     private Map BuildMap()
     {
         var map = new Map();
-        map.Id = ArenaManager.ArenaLocationName;
+        map.Id = "xiepe.MonsterArena.Arena";
         map.Description = "Monster Arena";
         map.Properties["Music"] = new PropertyValue("MarlonsTheme");
 
@@ -76,39 +91,33 @@ public class ArenaMapAsset
                 back.Tiles[x, y] = new StaticTile(back, floors, BlendMode.Alpha, ((x + y) % 2 == 0) ? a : b);
         }
 
-        // the room occupies [Pad .. Pad+W-1] x [Pad .. Pad+H-1]; the ring around it is walkable floor
-        const int X0 = Pad, Y0 = Pad, X1 = Pad + W - 1, Y1 = Pad + H - 1;
-
-        // --- north wall (y=Y0): top edge, with a 2-tile exit gap in the middle ---
+        // --- north wall (y=Y0): top edge ---
         for (int x = X0; x <= X1; x++)
         {
-            if (x == X0 + DoorX0 || x == X0 + DoorX1)
-                continue; // the exit opening
             int t = (x == X0) ? WallTopL : (x == X1) ? WallTopR : WallTopM;
             buildings.Tiles[x, Y0] = new StaticTile(buildings, interior, BlendMode.Alpha, t);
         }
 
-        // --- west & east walls (y=Y0+1..Y1-1), open at the bottom row ---
+        // --- west & east walls (y=Y0+1..Y1-1) ---
         for (int y = Y0 + 1; y < Y1; y++)
         {
             buildings.Tiles[X0, y] = new StaticTile(buildings, interior, BlendMode.Alpha, WallL);
             buildings.Tiles[X1, y] = new StaticTile(buildings, interior, BlendMode.Alpha, WallR);
         }
-        // bottom corners / base
-        buildings.Tiles[X0, Y1] = new StaticTile(buildings, interior, BlendMode.Alpha, WallBaseL);
-        buildings.Tiles[X1, Y1] = new StaticTile(buildings, interior, BlendMode.Alpha, WallBaseR);
+
+        // --- south wall (y=Y1) with a 2-tile exit gap in the middle ---
+        for (int x = X0; x <= X1; x++)
+        {
+            if (x == DoorX0 || x == DoorX1)
+                continue; // the exit opening
+            int t = (x == X0) ? WallBaseL : (x == X1) ? WallBaseR : WallTopM;
+            buildings.Tiles[x, Y1] = new StaticTile(buildings, interior, BlendMode.Alpha, t);
+        }
 
         // --- baseboard (walls_and_floors 32) seals the wall bottom so monsters can't slip through ---
-        // along the north wall (except the exit gap) and down the west/east walls
-        for (int x = 1; x < W - 1; x++)
-        // --- baseboard (walls_and_floors 32) seals the wall bottom so monsters can't slip through ---
-        // along the north wall (except the exit gap) and down the west/east walls
+        // along the north wall and down the west/east walls
         for (int bx = X0 + 1; bx < X1; bx++)
-        {
-            if (bx == X0 + DoorX0 || bx == X0 + DoorX1)
-                continue;
             buildings.Tiles[bx, Y0 + 1] = new StaticTile(buildings, floors, BlendMode.Alpha, Baseboard);
-        }
         for (int by = Y0 + 2; by < Y1; by++)
         {
             buildings.Tiles[X0 + 1, by] = new StaticTile(buildings, floors, BlendMode.Alpha, Baseboard);

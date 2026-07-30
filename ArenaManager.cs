@@ -8,28 +8,27 @@ using StardewValley.Monsters;
 namespace MonsterArena;
 
 /// <summary>Owns the arena GameLocation: builds it, warps the player in, spawns purchased
-/// monsters clustered in the pen, and warps the player back out.</summary>
+/// monsters clustered in the pen, refunds the un-killed share if the player leaves early,
+/// and warps the player back out.</summary>
 public class ArenaManager
 {
     public const string ArenaLocationName = "xiepe.MonsterArena.Arena";
     public const string ArenaMapAsset = "Maps/" + ArenaLocationName;
+
+    /// <summary>Fraction of the surviving monsters' price refunded when the player leaves early.</summary>
+    public const double RefundRatio = 0.6;
 
     private readonly IModHelper helper;
     private readonly IMonitor monitor;
 
     /// <summary>The monsters the player has bought but not yet been warped in to fight.</summary>
     public readonly List<MonsterCatalog.Entry> Pending = new();
+    /// <summary>The monsters spawned for the current session (alive or already slain).</summary>
+    private readonly List<MonsterCatalog.Entry> sessionBought = new();
     private string returnLocation = "AdventureGuild";
     private Vector2 returnTile = new Vector2(4, 7);
 
     public bool SessionActive { get; private set; }
-
-    // pen tile: clustered against the north wall, horizontally centred (offset by the floor pad)
-    public const int PenX = 6 + (MonsterArena.ArenaMapAsset.W - 1) / 2;  // room-centre column
-    public const int PenY = 6 + 2;
-    // player spawn: south of the pen, centred
-    public const int SpawnX = 6 + (MonsterArena.ArenaMapAsset.W - 1) / 2;
-    public const int SpawnY = 6 + MonsterArena.ArenaMapAsset.H - 3;
 
     public ArenaManager(IModHelper helper, IMonitor monitor)
     {
@@ -37,23 +36,22 @@ public class ArenaManager
         this.monitor = monitor;
     }
 
-    /// <summary>True when the local player is standing on a north exit tile (should warp out).</summary>
+    // map-constant shortcuts
+    private static int PenX => MonsterArena.ArenaMapAsset.PenX;
+    private static int PenY => MonsterArena.ArenaMapAsset.PenY;
+    private static int SpawnX => MonsterArena.ArenaMapAsset.SpawnX;
+    private static int SpawnY => MonsterArena.ArenaMapAsset.SpawnY;
+
+    /// <summary>True when the local player is standing on the south exit door tiles.</summary>
     public bool IsPlayerAtExit()
     {
         if (Game1.currentLocation?.Name != ArenaLocationName)
             return false;
         var t = Game1.player.Tile;
-        int ty = (int)t.Y;
-        int tx = (int)t.X;
-        int door0 = 6 + MonsterArena.ArenaMapAsset.DoorX0;
-        int door1 = 6 + MonsterArena.ArenaMapAsset.DoorX1;
-        return ty <= 6 + 1 && (tx == door0 || tx == door1);
-    }
-
-    /// <summary>Warp the player out through the exit and clean up.</summary>
-    public void ExitThroughDoor()
-    {
-        this.EndSession();
+        int tx = (int)t.X, ty = (int)t.Y;
+        int dx0 = MonsterArena.ArenaMapAsset.DoorX0, dx1 = MonsterArena.ArenaMapAsset.DoorX1;
+        int dy = MonsterArena.ArenaMapAsset.DoorY;
+        return ty >= dy && (tx == dx0 || tx == dx1);
     }
 
     public void QueuePurchase(MonsterCatalog.Entry entry, int count)
@@ -84,8 +82,10 @@ public class ArenaManager
         this.SessionActive = true;
         if (Game1.activeClickableMenu is StardewValley.Menus.DialogueBox)
             Game1.activeClickableMenu.exitThisMenu();
-        Game1.warpFarmer(ArenaLocationName, SpawnX, SpawnY, 0); // stand south of the pen, facing it
+        Game1.warpFarmer(ArenaLocationName, SpawnX, SpawnY, 0); // by the south door, facing the pen
 
+        this.sessionBought.Clear();
+        this.sessionBought.AddRange(this.Pending);
         var toSpawn = this.Pending.ToList();
         this.Pending.Clear();
         this.SpawnMonsters(arena, toSpawn);
@@ -111,7 +111,6 @@ public class ArenaManager
         int i = 0;
         foreach (var entry in entries)
         {
-            // a couple pixels of jitter only, so they truly pile onto one spot
             float jx = (i % 3 - 1) * 4f;
             float jy = (i % 2) * 4f;
             Vector2 pixel = new Vector2(PenX * 64f + jx, PenY * 64f + jy);
@@ -130,8 +129,6 @@ public class ArenaManager
         m.stunTime.Value = int.MaxValue;   // no self-movement / attacks
         m.DamageToFarmer = 0;              // contact deals no damage
         m.focusedOnFarmers = false;
-        // NOTE: Slipperiness left at the monster's natural value so hits still knock it back;
-        // the surrounding walls cancel the slide so it stays piled on the pen tile.
     }
 
     /// <summary>Re-pin any monster that a hit knocked off the pen tile (safety net for the wall).</summary>
@@ -147,7 +144,6 @@ public class ArenaManager
                 continue;
             m.stunTime.Value = int.MaxValue;
             m.DamageToFarmer = 0;
-            // if a knockback slid it away from the pen, snap it back onto the pile
             if (m.Tile.X < PenX - 2 || m.Tile.X > PenX + 2 || m.Tile.Y > PenY + 2)
             {
                 float jx = (i % 3 - 1) * 4f;
@@ -158,26 +154,7 @@ public class ArenaManager
         }
     }
 
-    /// <summary>Send the player back and clean up the arena for next time.
-    /// Drops (debris) are collected by the player before they walk out, so we only need to
-    /// remove any leftover live monsters; dead-monster loot has already spawned as debris.</summary>
-    public void EndSession()
-    {
-        if (!this.SessionActive)
-            return;
-        this.SessionActive = false;
-
-        var arena = Game1.getLocationFromName(ArenaLocationName);
-        if (arena != null)
-            arena.characters.RemoveWhere(c => c is Monster);
-
-        // close any lingering menu before warping back
-        if (Game1.activeClickableMenu != null)
-            Game1.exitActiveMenu();
-        Game1.warpFarmer(this.returnLocation, (int)this.returnTile.X, (int)this.returnTile.Y, 2);
-        this.monitor.Log("Arena session ended.", LogLevel.Info);
-    }
-
+    /// <summary>Count of live monsters left in the pen.</summary>
     public int RemainingMonsters()
     {
         if (!this.SessionActive)
@@ -186,5 +163,42 @@ public class ArenaManager
         if (arena == null)
             return 0;
         return arena.characters.Count(c => c is Monster m && m.Health > 0);
+    }
+
+    /// <summary>Refund for leaving early: RefundRatio of the still-alive monsters' total price.</summary>
+    public int ComputeRefund()
+    {
+        int alive = this.RemainingMonsters();
+        if (alive <= 0)
+            return 0;
+        // refund by matching surviving count against the cheapest entries first is unfair; instead
+        // refund RefundRatio of the average price of what was bought this session, per survivor.
+        if (this.sessionBought.Count == 0)
+            return 0;
+        double avg = this.sessionBought.Average(e => e.Price);
+        return (int)(avg * alive * RefundRatio);
+    }
+
+    /// <summary>Leave the arena. If refundGold > 0, give the player that gold (leaving early).</summary>
+    public void LeaveArena(int refundGold)
+    {
+        if (!this.SessionActive)
+            return;
+        this.SessionActive = false;
+
+        var arena = Game1.getLocationFromName(ArenaLocationName);
+        if (arena != null)
+            arena.characters.RemoveWhere(c => c is Monster);
+        this.sessionBought.Clear();
+
+        if (Game1.activeClickableMenu != null)
+            Game1.exitActiveMenu();
+        if (refundGold > 0)
+        {
+            Game1.player.Money += refundGold;
+            Game1.playSound("purchase");
+        }
+        Game1.warpFarmer(this.returnLocation, (int)this.returnTile.X, (int)this.returnTile.Y, 2);
+        this.monitor.Log($"Arena session ended (refund {refundGold}g).", LogLevel.Info);
     }
 }

@@ -28,6 +28,7 @@ public class ModEntry : Mod
         );
 
         helper.Events.Content.AssetRequested += new ArenaMapAsset().OnAssetRequested;
+        helper.Events.Content.AssetRequested += this.OnAssetRequested;
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
         helper.Events.Player.Warped += this.OnWarped;
         helper.ConsoleCommands.Add("ma_arena", "Open the monster arena shop (debug).", (_, __) => this.OpenShop());
@@ -78,7 +79,7 @@ public class ModEntry : Mod
             responses.Insert(2, new Response("Recovery", "找回丢失的物品。"));
 
         location.createQuestionDialogue(
-            "哈，想练练手？我驯了一批怪物，全关在我亲手研发的「定身墙」里——那墙邪门得很，幽灵、飞蛇都别想钻出去。你只管进去对着它们一顿猛砍，它们跑不掉也伤不了你，砍死照样掉东西、照样长经验。打完了捡完宝，从北墙那个门走出去就行。明码标价，要来几只吗？",
+            "想练练手？我驯了一批怪，关在围栏里，跑不掉也伤不了你。砍死照样掉东西、长经验，打完从南门出去。来几只？",
             responses.ToArray(),
             new GameLocation.afterQuestionBehavior(this.OnArenaAnswer),
             Game1.getCharacterFromName("Marlon")
@@ -136,6 +137,27 @@ public class ModEntry : Mod
         return false; // keep the shop open so you can pick several before submitting
     }
 
+    // --- Adventure Guild open time: 2 PM -> 9 AM ---
+    // The mountain door tile action is "LockedDoorWarp 6 19 AdventureGuild 1400 2600".
+    // Rewrite the map asset so it opens at 9 AM instead, to match the arena being available early.
+    private void OnAssetRequested(object? sender, AssetRequestedEventArgs e)
+    {
+        if (!e.NameWithoutLocale.IsEquivalentTo("Maps/Mountain"))
+            return;
+        e.Edit(asset =>
+        {
+            var map = asset.AsMap().Data;
+            var buildings = map.GetLayer("Buildings");
+            var tile = buildings.Tiles[76, 8];
+            if (tile != null && tile.Properties.TryGetValue("Action", out var action)
+                && action.ToString() == "LockedDoorWarp 6 19 AdventureGuild 1400 2600")
+            {
+                tile.Properties["Action"] = new xTile.ObjectModel.PropertyValue("LockedDoorWarp 6 19 AdventureGuild 900 2600");
+                this.Monitor.Log("冒险者公会开门时间已改为早上 9:00。", LogLevel.Info);
+            }
+        }, AssetEditPriority.Default);
+    }
+
     // --- session flow ---
     private bool wasShopOpen;
     private bool wasAtExit;
@@ -159,14 +181,25 @@ public class ModEntry : Mod
         if (!this.Arena.SessionActive)
             return;
 
-        // exit: stepping into the north door warps you back out (edge-triggered so the warp-in
-        // tile isn't mistaken for the door on the first frame)
+        // exit: stepping onto the south door. Edge-triggered, and not while a menu is up.
         bool atExit = this.Arena.IsPlayerAtExit();
         if (atExit && !this.wasAtExit && Game1.activeClickableMenu == null)
         {
             this.wasAtExit = true;
-            Game1.drawObjectDialogue(RemainingSafe() > 0 ? "还有怪没打完，这就走？行吧，剩下的我收回去了。" : "打得漂亮！宝都捡好了吧，走你。");
-            this.Arena.ExitThroughDoor();
+            int alive = this.Arena.RemainingMonsters();
+            if (alive <= 0)
+            {
+                // cleared everything: no refund, just walk out
+                this.Arena.LeaveArena(0);
+                return;
+            }
+            // still monsters left: confirm + offer a partial refund
+            int refund = this.Arena.ComputeRefund();
+            Game1.currentLocation.createQuestionDialogue(
+                $"还有 {alive} 只怪没打完。现在走的话我收回来，退你 {refund} 金。走吗？",
+                new[] { new Response("Arena_LeaveYes", "走，退钱收工。"), new Response("Arena_LeaveNo", "不走，接着砍。") },
+                new GameLocation.afterQuestionBehavior(this.OnExitAnswer)
+            );
             return;
         }
         this.wasAtExit = atExit;
@@ -176,16 +209,19 @@ public class ModEntry : Mod
             this.Arena.RepinMonsters();
     }
 
-    private static int RemainingSafe()
+    private void OnExitAnswer(Farmer who, string whichAnswer)
     {
-        try { return ModEntry.Instance.Arena.RemainingMonsters(); }
-        catch { return 0; }
+        if (whichAnswer == "Arena_LeaveYes")
+        {
+            this.Arena.LeaveArena(this.Arena.ComputeRefund());
+        }
+        // "Arena_LeaveNo": do nothing; wasAtExit resets once they step off the door tile
     }
 
     private void OnWarped(object? sender, WarpedEventArgs e)
     {
-        // if the player leaves the arena early, clean up so the next run starts fresh
+        // safety: if the player somehow leaves the arena without the door, clean up (no refund)
         if (e.OldLocation?.Name == ArenaManager.ArenaLocationName && this.Arena.SessionActive)
-            this.Arena.EndSession();
+            this.Arena.LeaveArena(0);
     }
 }
