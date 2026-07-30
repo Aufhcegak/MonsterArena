@@ -70,11 +70,15 @@ public class ArenaMapAsset
         map.AddTileSheet(floors);
 
         var layerSize = new Size(FullW, FullH);
-        var back = new Layer("Back", map, layerSize, new Size(16, 16));
-        var buildings = new Layer("Buildings", map, layerSize, new Size(16, 16));
-        var front = new Layer("Front", map, layerSize, new Size(16, 16));
-        var paths = new Layer("Paths", map, layerSize, new Size(16, 16));
-        var alwaysFront = new Layer("AlwaysFront", map, layerSize, new Size(16, 16));
+        // CRITICAL: use 64x64 tile size (Game1.tileSize), NOT 16x16!
+        // Layer.m_tileSize is STATIC and shared globally. Passing (16,16) here polluted it,
+        // causing IsOutOfBounds to use DisplayWidth=23*16=368px instead of 23*64=1472px.
+        // The player "穿墙" because isCollidingPosition returns false (out of bounds = passable).
+        var back = new Layer("Back", map, layerSize, new Size(64, 64));
+        var buildings = new Layer("Buildings", map, layerSize, new Size(64, 64));
+        var front = new Layer("Front", map, layerSize, new Size(64, 64));
+        var paths = new Layer("Paths", map, layerSize, new Size(64, 64));
+        var alwaysFront = new Layer("AlwaysFront", map, layerSize, new Size(64, 64));
         map.AddLayer(back);
         map.AddLayer(buildings);
         map.AddLayer(front);
