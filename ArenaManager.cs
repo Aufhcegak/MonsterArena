@@ -206,4 +206,17 @@ public class ArenaManager
         Game1.warpFarmer(this.returnLocation, (int)this.returnTile.X, (int)this.returnTile.Y, 2);
         this.monitor.Log($"Arena session ended (refund {refundGold}g).", LogLevel.Info);
     }
+
+    /// <summary>Automated test: build the real arena location and spawn every catalog monster
+    /// into it through the exact production code path (no farmer needed). Returns the count
+    /// of alive monsters in the pen afterwards.</summary>
+    public int TestSpawnAllInArena()
+    {
+        var arena = this.GetOrCreateArena();
+        arena.characters.RemoveWhere(c => c is Monster);
+        this.sessionBought.Clear();
+        this.sessionBought.AddRange(MonsterCatalog.All);
+        this.SpawnMonsters(arena, MonsterCatalog.All);
+        return arena.characters.Count(c => c is Monster m && m.Health > 0);
+    }
 }

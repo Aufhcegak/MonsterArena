@@ -42,6 +42,18 @@ public class ModEntry : Mod
             this.Arena.QueuePurchase(MonsterCatalog.All[11], 1);
             this.Arena.BeginSession();
         });
+        helper.ConsoleCommands.Add("ma_selftest", "Construct every catalog monster and hit-test it (debug).", (_, __) => this.RunSelfTest());
+        helper.ConsoleCommands.Add("ma_spawnall", "Queue every catalog monster and enter the arena (debug).", (_, __) =>
+        {
+            for (int i = 0; i < MonsterCatalog.All.Count; i++)
+                this.Arena.QueuePurchase(MonsterCatalog.All[i], 1);
+            this.Arena.BeginSession();
+            this.Monitor.Log($"[ma_spawnall] 已进竞技场: 全部 {MonsterCatalog.All.Count} 种怪物各 1 只。", LogLevel.Info);
+        });
+
+        // automated test hook: if autotest.txt sits next to the DLL, run the self-test
+        // automatically right after a save loads (used for headless regression runs)
+        this.autotestPending = System.IO.File.Exists(System.IO.Path.Combine(helper.DirectoryPath, "autotest.txt"));
     }
 
     /// <summary>Expose a tiny API so an automated self-test mod can drive the arena.</summary>
@@ -211,9 +223,56 @@ public class ModEntry : Mod
     // --- session flow ---
     private bool wasShopOpen;
     private bool wasAtExit;
+    private bool autotestPending;
+    private bool autotestSpawnPending;
+
+    /// <summary>Autotest part 3: in a live save, queue every catalog monster, warp into the
+    /// arena, and verify all of them spawned alive at the pen.</summary>
+    private void RunArenaIntegrationTest()
+    {
+        try
+        {
+            for (int i = 0; i < MonsterCatalog.All.Count; i++)
+                this.Arena.QueuePurchase(MonsterCatalog.All[i], 1);
+            this.Arena.BeginSession();
+
+            var arena = Game1.getLocationFromName(ArenaManager.ArenaLocationName);
+            int alive = this.Arena.RemainingMonsters();
+            var names = arena?.characters
+                .OfType<StardewValley.Monsters.Monster>()
+                .Where(m => m.Health > 0)
+                .Select(m => m.Name)
+                .ToList();
+
+            this.Monitor.Log($"[ma_selftest] 实机集成测试: 排队 {MonsterCatalog.All.Count} 只, 竞技场存活 {alive} 只. {string.Join("、", names ?? new List<string>())}", LogLevel.Info);
+        }
+        catch (Exception ex)
+        {
+            this.Monitor.Log($"[ma_selftest] 实机集成测试失败: {ex}", LogLevel.Error);
+        }
+    }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
     {
+        // automated test hook: run the self-test once as soon as the game is up.
+        // Works on the title screen — monster construction only needs the content
+        // pipeline, and takeDamage only needs a location + a farmer reference.
+        if (this.autotestPending && Context.IsGameLaunched && !Context.IsWorldReady)
+        {
+            this.autotestPending = false;
+            this.RunSelfTest();
+            this.autotestSpawnPending = true; // arm the arena spawn for the next save load
+            return;
+        }
+
+        // integration test part 2: once the player is free in a real save, queue ALL
+        // monsters and warp in so the full arena flow can be exercised live
+        if (this.autotestSpawnPending && Context.IsWorldReady && Context.IsPlayerFree)
+        {
+            this.autotestSpawnPending = false;
+            this.RunArenaIntegrationTest();
+        }
+
         if (!Context.IsWorldReady)
             return;
 
@@ -273,5 +332,96 @@ public class ModEntry : Mod
         // safety: if the player somehow leaves the arena without the door, clean up (no refund)
         if (e.OldLocation?.Name == ArenaManager.ArenaLocationName && this.Arena.SessionActive)
             this.Arena.LeaveArena(0);
+    }
+
+    /// <summary>Construct every catalog monster and verify it (a) spawns with a visible
+    /// texture, (b) takes damage when hit, and (c) dies when hit enough. Prints a per-monster
+    /// report. Used for regression-testing the monster factories.</summary>
+    private void RunSelfTest()
+    {
+        int pass = 0, fail = 0;
+        var failures = new List<string>();
+
+        // one shared location so sounds/drops have somewhere to go; never registered in
+        // Game1.locations, just a scratch object
+        var scratch = new GameLocation("Maps\\Town", "ma_selftest_scratch");
+        var who = Game1.player; // non-null even on the title screen
+
+        foreach (var entry in MonsterCatalog.All)
+        {
+            string result;
+            try
+            {
+                result = this.TestOneMonster(entry, scratch, who);
+            }
+            catch (Exception ex)
+            {
+                result = $"构造/受击异常: {ex.GetType().Name}: {ex.Message}";
+            }
+
+            bool ok = result == "OK";
+            if (ok) pass++; else fail++;
+            if (!ok) failures.Add($"{entry.Name}: {result}");
+            this.Monitor.Log($"[ma_selftest] {(ok ? "PASS" : "FAIL")} {entry.Name} — {result}", ok ? LogLevel.Info : LogLevel.Error);
+        }
+
+        this.Monitor.Log($"[ma_selftest] 完成: {pass} 通过, {fail} 失败. {string.Join("; ", failures)}", fail == 0 ? LogLevel.Info : LogLevel.Warn);
+
+        // part 2: spawn all 46 monsters into the REAL arena through the production code path
+        try
+        {
+            int alive = this.Arena.TestSpawnAllInArena();
+            var arena = Game1.getLocationFromName(ArenaManager.ArenaLocationName);
+            var bad = arena?.characters
+                .OfType<StardewValley.Monsters.Monster>()
+                .Where(m => m.Health > 0 && m.Sprite?.Texture == null)
+                .Select(m => m.Name)
+                .ToList();
+            this.Monitor.Log($"[ma_selftest] 竞技场实机刷怪: 已刷 {MonsterCatalog.All.Count} 种, 存活 {alive} 只. 无贴图: {(bad != null && bad.Count > 0 ? string.Join("、", bad) : "无")}", alive == MonsterCatalog.All.Count && (bad == null || bad.Count == 0) ? LogLevel.Info : LogLevel.Warn);
+        }
+        catch (Exception ex)
+        {
+            this.Monitor.Log($"[ma_selftest] 竞技场实机刷怪失败: {ex}", LogLevel.Error);
+        }
+    }
+
+    private string TestOneMonster(MonsterCatalog.Entry entry, GameLocation scratch, Farmer who)
+    {
+        // 1. construct
+        var m = entry.Factory(Vector2.Zero);
+        if (m == null) return "工厂返回 null";
+        if (m.Health <= 0) return $"血量异常 ({m.Health})";
+
+        // 2. visible sprite?
+        if (m.Sprite?.Texture == null) return "无贴图 (Sprite.Texture 为 null)";
+        if (m.Sprite.SourceRect.Width <= 0 || m.Sprite.SourceRect.Height <= 0) return "精灵尺寸异常";
+
+        // 3. put it in a location so takeDamage works (needs currentLocation for sounds)
+        scratch.characters.Clear();
+        scratch.characters.Add(m);
+        m.currentLocation = scratch;
+        m.Position = new Vector2(64f, 64f);
+
+        // 4. freeze it exactly like the arena does (ArenaManager.Freeze), then hit it:
+        //    3 hits of maxHealth each — the monster must take damage every hit and die by
+        //    the third. Damage 99999 bypasses resilience/armor checks.
+        m.stunTime.Value = int.MaxValue;
+        m.DamageToFarmer = 0;
+        m.focusedOnFarmers = false;
+
+        for (int i = 0; i < 3; i++)
+        {
+            int dealt = m.takeDamage(99999, 0, 0, false, 1.0, who);
+            if (dealt <= 0)
+                return $"第{i + 1}次受击无效 (takeDamage 返回 {dealt}) — 被格挡/免疫";
+            if (m.Health <= 0)
+            {
+                if (m.ShouldMonsterBeRemoved())
+                    return "OK";
+                return $"血量归零但 ShouldMonsterBeRemoved()=false — 死亡后不被移除";
+            }
+        }
+
+        return "3次重击后仍未死亡 (HP残留: " + m.Health + ")";
     }
 }
