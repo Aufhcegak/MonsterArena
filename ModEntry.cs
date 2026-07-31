@@ -26,6 +26,10 @@ public class ModEntry : Mod
             original: AccessTools.Method(typeof(GameLocation), nameof(GameLocation.performAction), new[] { typeof(string[]), typeof(Farmer), typeof(xTile.Dimensions.Location) }),
             prefix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.BeforePerformAction))
         );
+        harmony.Patch(
+            original: AccessTools.Method(typeof(GameLocation), nameof(GameLocation.monsterDrop), new[] { typeof(Monster), typeof(int), typeof(int), typeof(Farmer) }),
+            prefix: new HarmonyMethod(typeof(ModEntry), nameof(ModEntry.BeforeMonsterDrop))
+        );
 
         helper.Events.Content.AssetRequested += new ArenaMapAsset().OnAssetRequested;
         helper.Events.Content.AssetRequested += this.OnAssetRequested;
@@ -174,6 +178,34 @@ public class ModEntry : Mod
                 }
             }
         }, AssetEditPriority.Default);
+    }
+
+    // --- drop rate halving ---
+    // Arena monsters drop at half the vanilla rate. The original roll happens at spawn time
+    // (parseMonsterInfo) so it can't be re-rolled here; instead we remove each queued drop with
+    // 50% probability, which halves every drop line's effective rate without touching the
+    // guaranteed-100% lines' drop category (they just drop half as often).
+    private static bool BeforeMonsterDrop(GameLocation __instance, Monster monster)
+    {
+        try
+        {
+            if (__instance.Name != ArenaManager.ArenaLocationName || monster == null)
+                return true;
+            if (monster.objectsToDrop != null)
+            {
+                for (int i = monster.objectsToDrop.Count - 1; i >= 0; i--)
+                {
+                    if (Game1.random.NextDouble() < 0.5)
+                        monster.objectsToDrop.RemoveAt(i);
+                }
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Instance.Monitor.Log($"Arena drop halving hook failed: {ex}", LogLevel.Error);
+            return true;
+        }
     }
 
     // --- session flow ---
