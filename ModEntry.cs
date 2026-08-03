@@ -22,6 +22,7 @@ public class ModEntry : Mod
         Instance = this;
         this.Arena = new ArenaManager(helper, this.Monitor);
         this.Helper = helper;
+        ArenaManager.SessionEndBroadcast = this.BroadcastSessionEnd;
 
         var harmony = new Harmony(this.ModManifest.UniqueID);
         harmony.Patch(
@@ -81,6 +82,14 @@ public class ModEntry : Mod
     private const string MsgBuy = "ma_buy";
     private const string MsgEnter = "ma_enter";
     private const string MsgEnterAck = "ma_enter_ack";
+    private const string MsgSessionEnd = "ma_session_end";
+
+    /// <summary>主机:广播竞技场会话结束(访客清 SessionActive,防"再点开打进空场")。</summary>
+    public void BroadcastSessionEnd()
+    {
+        if (!Game1.IsMasterGame) return;
+        Helper.Multiplayer.SendMessage(new object(), MsgSessionEnd, new[] { ModManifest.UniqueID });
+    }
 
     private class BuyPayload
     {
@@ -123,6 +132,16 @@ public class ModEntry : Mod
                     // 访客收到 ack:主机已建场刷怪(或会话已开)→ 访客自己 warp 进竞技场。
                     if (!Game1.IsMasterGame)
                         this.Arena.BeginSessionRemote();
+                    break;
+                case MsgSessionEnd:
+                    // 主机结束会话:访客清 SessionActive;若在竞技场里则先退出(回原地点)再清。
+                    if (!Game1.IsMasterGame)
+                    {
+                        bool inArena = Game1.currentLocation?.Name == ArenaManager.ArenaLocationName;
+                        if (inArena)
+                            this.Arena.LeaveArena(0);   // 先退(LeaveArena 内部依赖 SessionActive)
+                        this.Arena.ClearSession();
+                    }
                     break;
             }
         }
@@ -432,7 +451,8 @@ public class ModEntry : Mod
         this.wasAtExit = atExit;
 
         // keep monsters pinned to the pen (knockback can't push them through Marlon's wall)
-        if (Game1.currentLocation?.Name == ArenaManager.ArenaLocationName && e.IsMultipleOf(4))
+        // 联机:只主机做(怪物实体只在主机;访客镜像会被主机同步覆盖,重复操作无意义)
+        if (Game1.currentLocation?.Name == ArenaManager.ArenaLocationName && Game1.IsMasterGame && e.IsMultipleOf(4))
             this.Arena.RepinMonsters();
     }
 
