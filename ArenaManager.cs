@@ -244,7 +244,12 @@ public class ArenaManager
         this.Pending.Clear();
     }
 
-    /// <summary>Leave the arena. If refundGold > 0, give the player that gold (leaving early).</summary>
+    /// <summary>联机:主机结束会话时广播访客(由 ModEntry 接线;logic_test 无 ModEntry 时跳过)。</summary>
+    internal static Action? SessionEndBroadcast;
+
+    /// <summary>Leave the arena. If refundGold > 0, give the player that gold (leaving early).
+    /// 联机:主机结束会话时清怪 + 广播会话结束(访客 SessionActive 残留 true 会导致
+    /// 再点开打进空场 —— 访客收到广播后同步结束会话)。</summary>
     public void LeaveArena(int refundGold)
     {
         if (!this.SessionActive)
@@ -255,6 +260,10 @@ public class ArenaManager
         if (arena != null)
             arena.characters.RemoveWhere(c => c is Monster);
         this.sessionBought.Clear();
+
+        // 联机:主机结束会话 → 广播给所有访客(它们各自清会话;若在竞技场里则退出)
+        if (Game1.IsMasterGame)
+            SessionEndBroadcast?.Invoke();
 
         if (Game1.activeClickableMenu != null)
             Game1.exitActiveMenu();
