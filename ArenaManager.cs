@@ -21,10 +21,22 @@ public class ArenaManager
     private readonly IModHelper helper;
     private readonly IMonitor monitor;
 
-    /// <summary>The monsters the player has bought but not yet been warped in to fight.</summary>
-    public readonly List<MonsterCatalog.Entry> Pending = new();
-    /// <summary>The monsters spawned for the current session (alive or already slain).</summary>
-    private readonly List<MonsterCatalog.Entry> sessionBought = new();
+    /// <summary>一次购买(含买家)。联机共享池:谁买的都能被"直接开打"消耗。</summary>
+    public class PendingPurchase
+    {
+        public MonsterCatalog.Entry Entry;
+        public long BuyerId;
+        public PendingPurchase(MonsterCatalog.Entry entry, long buyerId)
+        {
+            Entry = entry;
+            BuyerId = buyerId;
+        }
+    }
+
+    /// <summary>The monsters the players have bought but not yet been warped in to fight (host-authoritative shared pool).</summary>
+    public readonly List<PendingPurchase> Pending = new();
+    /// <summary>The monsters spawned for the current session (alive or already slain), with buyers.</summary>
+    private readonly List<PendingPurchase> sessionBought = new();
     private string returnLocation = "AdventureGuild";
     private Vector2 returnTile = new Vector2(4, 7);
 
@@ -57,18 +69,25 @@ public class ArenaManager
     public void QueuePurchase(MonsterCatalog.Entry entry, int count)
     {
         for (int i = 0; i < count; i++)
-            this.Pending.Add(entry);
+            this.Pending.Add(new PendingPurchase(entry, Game1.player.UniqueMultiplayerID));
     }
+
+    /// <summary>按目录条目分组统计(联机共享池:合计所有买家的数量)。</summary>
+    public IEnumerable<KeyValuePair<MonsterCatalog.Entry, int>> PendingSummary()
+        => this.Pending.GroupBy(p => p.Entry).ToDictionary(g => g.Key, g => g.Count());
 
     public bool HasPending => this.Pending.Count > 0;
 
-    /// <summary>Group pending monsters by entry -> count, for the summary message.</summary>
-    public IEnumerable<KeyValuePair<MonsterCatalog.Entry, int>> PendingSummary()
-        => this.Pending.GroupBy(e => e).ToDictionary(g => g.Key, g => g.Count());
-
-    /// <summary>Warp the player into the arena and spawn all pending monsters clustered in the pen.</summary>
+    /// <summary>Warp the player into the arena and spawn all pending monsters clustered in the pen.
+    /// 联机:只由主机执行(怪物实体/竞技场地点只在主机,访客 warp 进主机同步的地点)。
+    /// 主机每次进都重新刷满(访客买完怪、主机再进 → 刷新)。</summary>
     public void BeginSession()
     {
+        if (!Game1.IsMasterGame)
+        {
+            this.monitor.Log("[ma] 联机: 竞技场会话仅主机可发起(购买池由主机持有)。", LogLevel.Info);
+            return;
+        }
         if (this.Pending.Count == 0)
             return;
 
@@ -84,12 +103,31 @@ public class ArenaManager
             Game1.activeClickableMenu.exitThisMenu();
         Game1.warpFarmer(ArenaLocationName, SpawnX, SpawnY, 0); // by the south door, facing the pen
 
+        // 共享购买池:这次全部怪物进竞技场(访客买的也在内)。
         this.sessionBought.Clear();
         this.sessionBought.AddRange(this.Pending);
-        var toSpawn = this.Pending.ToList();
+        var toSpawn = this.Pending.Select(p => p.Entry).ToList();
         this.Pending.Clear();
         this.SpawnMonsters(arena, toSpawn);
         this.monitor.Log($"Arena session started with {toSpawn.Count} monsters.", LogLevel.Info);
+    }
+
+    /// <summary>访客侧会话标记:主机已开竞技场,访客 warp 进去即可看到刷好的怪。
+    /// 访客不刷怪(怪物实体只在主机,由主机同步给访客),只标记会话中供退出/出口判断。</summary>
+    public void BeginSessionRemote()
+    {
+        if (Game1.IsMasterGame)
+            return;
+        if (this.SessionActive)
+            return;
+        if (Game1.currentLocation != null)
+        {
+            this.returnLocation = Game1.currentLocation.Name;
+            this.returnTile = Game1.player.Tile;
+        }
+        this.SessionActive = true;
+        Game1.warpFarmer(ArenaLocationName, SpawnX, SpawnY, 0);
+        this.monitor.Log("Arena session joined (remote, host has the monsters).", LogLevel.Info);
     }
 
     private GameLocation GetOrCreateArena()
@@ -180,8 +218,16 @@ public class ArenaManager
         // refund RefundRatio of the average price of what was bought this session, per survivor.
         if (this.sessionBought.Count == 0)
             return 0;
-        double avg = this.sessionBought.Average(e => e.Price);
+        double avg = this.sessionBought.Average(p => p.Entry.Price);
         return (int)(avg * alive * RefundRatio);
+    }
+
+    /// <summary>清除会话状态(回标题画面用)。</summary>
+    public void ClearSession()
+    {
+        this.SessionActive = false;
+        this.sessionBought.Clear();
+        this.Pending.Clear();
     }
 
     /// <summary>Leave the arena. If refundGold > 0, give the player that gold (leaving early).</summary>
@@ -215,7 +261,7 @@ public class ArenaManager
         var arena = this.GetOrCreateArena();
         arena.characters.RemoveWhere(c => c is Monster);
         this.sessionBought.Clear();
-        this.sessionBought.AddRange(MonsterCatalog.All);
+        this.sessionBought.AddRange(MonsterCatalog.All.Select(e => new PendingPurchase(e, Game1.player.UniqueMultiplayerID)));
         this.SpawnMonsters(arena, MonsterCatalog.All);
         return arena.characters.Count(c => c is Monster m && m.Health > 0);
     }
