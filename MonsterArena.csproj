@@ -14,6 +14,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- 嵌套 logic_test 子工程:必须从主工程的默认 **/*.cs glob 排除,
+         否则它的 Program.cs 和 obj 生成文件会被编进主工程,AssemblyInfo 双重定义 -->
+    <Compile Remove="logic_test/**" />
+    <None Remove="logic_test/**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Pathoschild.Stardew.ModBuildConfig" Version="4.4.0" />
     <PackageReference Include="Lib.Harmony" Version="2.3.3" />
   </ItemGroup>
