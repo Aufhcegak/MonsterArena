@@ -15,11 +15,13 @@ public class ModEntry : Mod
 {
     internal static ModEntry Instance = null!;
     internal ArenaManager Arena = null!;
+    private IModHelper Helper = null!;
 
     public override void Entry(IModHelper helper)
     {
         Instance = this;
         this.Arena = new ArenaManager(helper, this.Monitor);
+        this.Helper = helper;
 
         var harmony = new Harmony(this.ModManifest.UniqueID);
         harmony.Patch(
@@ -35,6 +37,11 @@ public class ModEntry : Mod
         helper.Events.Content.AssetRequested += this.OnAssetRequested;
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
         helper.Events.Player.Warped += this.OnWarped;
+        // 联机消息:访客购买/请求进竞技场 → 主机
+        helper.Events.Multiplayer.ModMessageReceived += this.OnModMessageReceived;
+        helper.Events.GameLoop.SaveLoaded += this.OnSaveLoaded;
+        helper.Events.GameLoop.ReturnedToTitle += this.OnReturnedToTitle;
+        helper.Events.GameLoop.DayStarted += this.OnDayStarted;
         helper.ConsoleCommands.Add("ma_arena", "Open the monster arena shop (debug).", (_, __) => this.OpenShop());
         helper.ConsoleCommands.Add("ma_test", "Queue 2 test monsters and enter the arena (debug).", (_, __) =>
         {
@@ -68,6 +75,95 @@ public class ModEntry : Mod
         public void Begin() => this.arena.BeginSession();
         public int Remaining() => this.arena.RemainingMonsters();
         public bool Active => this.arena.SessionActive;
+    }
+
+    /// <summary>联机消息类型与载荷(访客 → 主机)。</summary>
+    private const string MsgBuy = "ma_buy";
+    private const string MsgEnter = "ma_enter";
+    private const string MsgEnterAck = "ma_enter_ack";
+
+    private class BuyPayload
+    {
+        public string MonsterName = "";
+        public int Count;
+    }
+
+    /// <summary>主机收到访客消息:买怪(加入共享池) / 请求进竞技场(刷怪)。</summary>
+    private void OnModMessageReceived(object? sender, ModMessageReceivedEventArgs e)
+    {
+        if (e.FromModID != ModManifest.UniqueID)
+            return;
+        if (!Context.IsWorldReady || !Game1.IsMasterGame)
+            return;
+        try
+        {
+            switch (e.Type)
+            {
+                case MsgBuy:
+                {
+                    var payload = e.ReadAs<BuyPayload>();
+                    var cat = MonsterCatalog.All.FirstOrDefault(c => c.Name == payload.MonsterName);
+                    if (cat != null && payload.Count > 0)
+                    {
+                        this.Arena.QueuePurchase(cat, payload.Count);
+                        this.Monitor.Log($"[ma] 联机: 玩家 {e.FromPlayerID} 购买 {payload.Count} 只 {cat.Name}(已入共享池)。", LogLevel.Info);
+                    }
+                    break;
+                }
+                case MsgEnter:
+                    // 访客请求进竞技场:主机先建场+刷怪(共享池全部),再回 ack 让访客 warp。
+                    if (Game1.IsMasterGame)
+                    {
+                        this.Arena.BeginSession();
+                        this.Helper.Multiplayer.SendMessage(new object(), MsgEnterAck, new[] { ModManifest.UniqueID }, new[] { e.FromPlayerID });
+                    }
+                    break;
+                case MsgEnterAck:
+                    // 访客收到 ack:主机已建场刷怪 → 访客自己 warp 进竞技场。
+                    // (竞技场地点在主机已存在,访客 warp 会从主机同步地图数据。)
+                    if (!Game1.IsMasterGame)
+                        this.Arena.BeginSessionRemote();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            this.Monitor.Log($"[ma] 联机消息处理失败: {ex}", LogLevel.Error);
+        }
+    }
+
+    /// <summary>竞技场地点必须常驻主机(访客 warp 到主机 RequireLocation 失败 = 黑屏)。
+    /// 读档后若竞技场不存在则重建(玩家第一次进时也已由 BeginSession 保证)。</summary>
+    private void OnSaveLoaded(object? sender, SaveLoadedEventArgs e)
+    {
+        if (!Game1.IsMasterGame)
+            return;
+        try
+        {
+            var existing = Game1.getLocationFromName(ArenaManager.ArenaLocationName);
+            if (existing == null)
+            {
+                var arena = new GameLocation(ArenaManager.ArenaMapAsset, ArenaManager.ArenaLocationName);
+                arena.map.LoadTileSheets(Game1.mapDisplayDevice);
+                Game1.locations.Add(arena);
+            }
+        }
+        catch (Exception ex)
+        {
+            this.Monitor.Log($"[ma] 读档重建竞技场失败: {ex}", LogLevel.Error);
+        }
+    }
+
+    private void OnReturnedToTitle(object? sender, ReturnedToTitleEventArgs e)
+    {
+        this.Arena.Pending.Clear();
+        this.Arena.ClearSession();
+    }
+
+    private void OnDayStarted(object? sender, DayStartedEventArgs e)
+    {
+        // 每天清空未使用的购买池(防跨天堆积)
+        this.Arena.Pending.Clear();
     }
 
     // --- Marlon dialogue injection ---
@@ -132,6 +228,13 @@ public class ModEntry : Mod
                 Utility.TryOpenShopMenu("AdventureGuildRecovery", "Marlon");
                 break;
             case "Arena_Enter":
+                if (!Game1.IsMasterGame)
+                {
+                    // 访客:请主机把共享池怪物刷进竞技场(竞技场地点/怪物实体只在主机)。
+                    this.Helper.Multiplayer.SendMessage(new object(), MsgEnter, new[] { ModManifest.UniqueID });
+                    Game1.drawObjectDialogue("已通知房主开竞技场，怪物马上进场。去围栏那儿吧（房主先开的话，你直接跟进去也行）。");
+                    return;
+                }
                 if (this.Arena.HasPending)
                     this.Arena.BeginSession();
                 else
@@ -162,7 +265,17 @@ public class ModEntry : Mod
         {
             var cat = MonsterCatalog.All.FirstOrDefault(c => c.Name == entry.MonsterName);
             if (cat != null)
-                this.Arena.QueuePurchase(cat, count);
+            {
+                if (Game1.IsMasterGame)
+                    this.Arena.QueuePurchase(cat, count);
+                else
+                {
+                    // 访客购买 → 发给主机进共享池(购买已扣访客的钱,池子里标记买家)。
+                    // 注意:ShopMenu 在访客端会真实扣钱(原版多人同步 Money),这里只同步"买了什么"。
+                    this.Helper.Multiplayer.SendMessage(new BuyPayload { MonsterName = cat.Name, Count = count }, MsgBuy, new[] { ModManifest.UniqueID });
+                    this.Monitor.Log($"[ma] 联机: 访客购买 {count} 只 {cat.Name},已请求主机加入共享池。", LogLevel.Info);
+                }
+            }
         }
         return false; // keep the shop open so you can pick several before submitting
     }
