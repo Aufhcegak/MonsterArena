@@ -79,8 +79,8 @@ public class ArenaManager
     public bool HasPending => this.Pending.Count > 0;
 
     /// <summary>Warp the player into the arena and spawn all pending monsters clustered in the pen.
-    /// 联机:只由主机执行(怪物实体/竞技场地点只在主机,访客 warp 进主机同步的地点)。
-    /// 主机每次进都重新刷满(访客买完怪、主机再进 → 刷新)。</summary>
+    /// 联机:主机权威。谁点"直接开打"谁进(发起者),其他玩家可跟着进(见 ModEntry 的
+    /// 广播/ack 消息链)。</summary>
     public void BeginSession()
     {
         if (!Game1.IsMasterGame)
@@ -88,28 +88,42 @@ public class ArenaManager
             this.monitor.Log("[ma] 联机: 竞技场会话仅主机可发起(购买池由主机持有)。", LogLevel.Info);
             return;
         }
-        if (this.Pending.Count == 0)
+        if (this.Pending.Count == 0 && !this.SessionActive)
             return;
+
+        // 会话已开(可能是访客开的):不重刷怪,直接进
+        if (!this.SessionActive)
+            this.HostOpenArena();
 
         if (Game1.currentLocation != null)
         {
             this.returnLocation = Game1.currentLocation.Name;
             this.returnTile = Game1.player.Tile;
         }
-
-        GameLocation arena = this.GetOrCreateArena();
-        this.SessionActive = true;
         if (Game1.activeClickableMenu is StardewValley.Menus.DialogueBox)
             Game1.activeClickableMenu.exitThisMenu();
         Game1.warpFarmer(ArenaLocationName, SpawnX, SpawnY, 0); // by the south door, facing the pen
+        this.monitor.Log("Arena session joined (host).", LogLevel.Info);
+    }
 
-        // 共享购买池:这次全部怪物进竞技场(访客买的也在内)。
+    /// <summary>主机:建场 + 刷满共享池怪物 + 开会话(不 warp 任何人)。
+    /// 访客请求进竞技场时由 ModEntry 调用;主机自己开打时由 BeginSession 调用。
+    /// 已开过会话则不重刷(怪物已在,防止重复刷怪/怪物翻倍)。</summary>
+    public void HostOpenArena()
+    {
+        if (!Game1.IsMasterGame || this.SessionActive)
+            return;
+        if (this.Pending.Count == 0)
+            return;
+
+        GameLocation arena = this.GetOrCreateArena();
+        this.SessionActive = true;
         this.sessionBought.Clear();
         this.sessionBought.AddRange(this.Pending);
         var toSpawn = this.Pending.Select(p => p.Entry).ToList();
         this.Pending.Clear();
         this.SpawnMonsters(arena, toSpawn);
-        this.monitor.Log($"Arena session started with {toSpawn.Count} monsters.", LogLevel.Info);
+        this.monitor.Log($"Arena session opened with {toSpawn.Count} monsters.", LogLevel.Info);
     }
 
     /// <summary>访客侧会话标记:主机已开竞技场,访客 warp 进去即可看到刷好的怪。
