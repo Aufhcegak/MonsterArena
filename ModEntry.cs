@@ -111,16 +111,16 @@ public class ModEntry : Mod
                     break;
                 }
                 case MsgEnter:
-                    // 访客请求进竞技场:主机先建场+刷怪(共享池全部),再回 ack 让访客 warp。
+                    // 访客请求进竞技场:主机建场+刷怪(若未开),回 ack 让【发起者】进去。
+                    // ⚠️ 不能调 BeginSession(那会 warp 主机)——开打者是谁,谁进。
                     if (Game1.IsMasterGame)
                     {
-                        this.Arena.BeginSession();
+                        this.Arena.HostOpenArena();
                         this.Helper.Multiplayer.SendMessage(new object(), MsgEnterAck, new[] { ModManifest.UniqueID }, new[] { e.FromPlayerID });
                     }
                     break;
                 case MsgEnterAck:
-                    // 访客收到 ack:主机已建场刷怪 → 访客自己 warp 进竞技场。
-                    // (竞技场地点在主机已存在,访客 warp 会从主机同步地图数据。)
+                    // 访客收到 ack:主机已建场刷怪(或会话已开)→ 访客自己 warp 进竞技场。
                     if (!Game1.IsMasterGame)
                         this.Arena.BeginSessionRemote();
                     break;
@@ -230,13 +230,18 @@ public class ModEntry : Mod
             case "Arena_Enter":
                 if (!Game1.IsMasterGame)
                 {
-                    // 访客:请主机把共享池怪物刷进竞技场(竞技场地点/怪物实体只在主机)。
+                    // 访客:请主机准备竞技场(未开则建场刷怪;已开则直接放行),然后【访客自己】warp 进。
                     this.Helper.Multiplayer.SendMessage(new object(), MsgEnter, new[] { ModManifest.UniqueID });
-                    Game1.drawObjectDialogue("已通知房主开竞技场，怪物马上进场。去围栏那儿吧（房主先开的话，你直接跟进去也行）。");
+                    Game1.drawObjectDialogue("已通知房主准备竞技场，怪物马上进场。");
                     return;
                 }
-                if (this.Arena.HasPending)
+                if (this.Arena.HasPending || this.Arena.SessionActive)
+                {
+                    // 主机自己进:未开会话先开场上怪;已开会话(可能是访客开的)直接进。
+                    if (!this.Arena.SessionActive)
+                        this.Arena.HostOpenArena();
                     this.Arena.BeginSession();
+                }
                 else
                     Game1.drawObjectDialogue("你还没选怪物。先点“挑选怪物”加几只，关掉清单后再来。");
                 break;
