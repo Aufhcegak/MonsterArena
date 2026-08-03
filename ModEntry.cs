@@ -97,12 +97,14 @@ public class ModEntry : Mod
         public int Count;
     }
 
-    /// <summary>主机收到访客消息:买怪(加入共享池) / 请求进竞技场(刷怪)。</summary>
+    /// <summary>主机收到访客消息:买怪(加入共享池) / 请求进竞技场(刷怪)。
+    /// ⚠️ 不能在最上面拦 !Game1.IsMasterGame —— 那样访客端永远收不到 MsgEnterAck/MsgSessionEnd,
+    /// 这就是"访客无论如何都进不了竞技场,只能房主进"的根因(用户实测)。各分支内部自行判断。</summary>
     private void OnModMessageReceived(object? sender, ModMessageReceivedEventArgs e)
     {
         if (e.FromModID != ModManifest.UniqueID)
             return;
-        if (!Context.IsWorldReady || !Game1.IsMasterGame)
+        if (!Context.IsWorldReady)
             return;
         try
         {
