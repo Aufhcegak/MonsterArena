@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>logic_test</AssemblyName>
+    <RootNamespace>logic_test</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 链接主工程源码:MonsterCatalog(目录完整性/工厂)、ArenaMapAsset(地图几何)、
+         ArenaManager(仅常量,构造需要 helper/monitor 但测试不 new)是纯逻辑,可无头测。
+         MonsterEntry 的 ISalable 方法里 drawInMenu 依赖 MonoGame,测试只测非渲染方法。
+         ModEntry(入口)由无头 SMAPI 集成测试覆盖。 -->
+    <Compile Include="..\MonsterCatalog.cs" />
+    <Compile Include="..\ArenaMapAsset.cs" />
+    <Compile Include="..\ArenaManager.cs" />
+    <Compile Include="..\MonsterEntry.cs" />
+    <Reference Include="StardewValley"><HintPath>..\..\..\Stardew Valley.dll</HintPath></Reference>
+    <Reference Include="StardewModdingAPI"><HintPath>..\..\..\StardewModdingAPI.dll</HintPath></Reference>
+    <Reference Include="MonoGame.Framework"><HintPath>..\..\..\MonoGame.Framework.dll</HintPath></Reference>
+    <Reference Include="xTile"><HintPath>..\..\..\xTile.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>
